@@ -120,6 +120,7 @@ typedef struct
    int settings;                       /// Request settings from the camera
    int cameraNum;                      /// Camera number
    int burstCaptureMode;               /// Enable burst mode
+   pid_t notifyPID;
 
    RASPIPREVIEW_PARAMETERS preview_parameters;    /// Preview setup parameters
    RASPICAM_CAMERA_PARAMETERS camera_parameters; /// Camera setup parameters
@@ -158,6 +159,7 @@ static void display_valid_parameters(char *app_name);
 #define CommandSignal       12
 #define CommandSettings     13
 #define CommandBurstMode    14
+#define CommandNotifyPID    15
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -176,6 +178,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandSignal,  "-signal",     "s",  "Wait between captures for a SIGUSR1 from another process", 0},
    { CommandSettings, "-settings",  "set","Retrieve camera settings and write to stdout", 0},
    { CommandBurstMode, "-burst",    "bm", "Enable 'burst capture mode'", 0},   
+   { CommandNotifyPID, "-notify-pid", "n",  "Send a SIGUSR1 to the process with given PID after each capture output has been completed", 0},
 };
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
@@ -224,6 +227,7 @@ static void default_status(RASPISTILLYUV_STATE *state)
    state->frameNextMethod = FRAME_NEXT_SINGLE;
    state->settings = 0;
    state->burstCaptureMode=0;
+   state->notifyPID = 0;
 
    // Setup preview window defaults
    raspipreview_set_defaults(&state->preview_parameters);
@@ -437,7 +441,14 @@ static int parse_cmdline(int argc, const char **argv, RASPISTILLYUV_STATE *state
       case CommandBurstMode: 
          state->burstCaptureMode=1;
          break;
-         
+
+      case CommandNotifyPID:
+         if (sscanf(argv[i + 1], "%u", &state->notifyPID) != 1)
+            valid = 0;
+         else
+            i++;
+         break;
+
       default:
       {
          // Try parsing for any image specific parameters
@@ -1406,6 +1417,14 @@ error:
 
       // Disable all our ports that are not handled by connections
       check_disable_port(camera_video_port);
+
+      if (state.notifyPID)
+      {
+         int res;
+         res = kill(state.notifyPID, SIGUSR1);
+         if (res)
+            fprintf(stderr, "Problem with sending SIGUSR1 to process PID %u (kill returned %d)\n", state.notifyPID, res);
+      }
 
       if (state.preview_connection)
          mmal_connection_destroy(state.preview_connection);

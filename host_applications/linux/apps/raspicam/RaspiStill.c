@@ -119,6 +119,7 @@ typedef struct
    int quality;                        /// JPEG quality setting (1-100)
    int wantRAW;                        /// Flag for whether the JPEG metadata also contains the RAW bayer image
    char *filename;                     /// filename of output file
+   pid_t notifyPID;                    /// The PID of the process to notify when a capture has been completed
    char *linkname;                     /// filename of output file
    MMAL_PARAM_THUMBNAIL_CONFIG_T thumbnailConfig;
    int verbose;                        /// !0 if want detailed run information
@@ -189,6 +190,7 @@ static void store_exif_tag(RASPISTILL_STATE *state, const char *exif_tag);
 #define CommandCamSelect    20
 #define CommandBurstMode    21
 #define CommandSensorMode   22
+#define CommandNotifyPID    23
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -215,6 +217,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandCamSelect, "-camselect","cs", "Select camera <number>. Default 0", 1 },
    { CommandBurstMode, "-burst",    "bm", "Enable 'burst capture mode'", 0},
    { CommandSensorMode,"-mode",     "md", "Force sensor mode. 0=auto. See docs for other modes available", 1},
+   { CommandNotifyPID, "-notify-pid","n", "Send a SIGUSR1 to the process with given PID after each capture output has been completed", 0},
 };
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
@@ -270,6 +273,7 @@ static void default_status(RASPISTILL_STATE *state)
    state->wantRAW = 0;
    state->filename = NULL;
    state->linkname = NULL;
+   state->notifyPID = 0;
    state->verbose = 0;
    state->thumbnailConfig.enable = 1;
    state->thumbnailConfig.width = 64;
@@ -477,8 +481,8 @@ static int parse_cmdline(int argc, const char **argv, RASPISTILL_STATE *state)
          else
             valid = 0;
          break;
-
       }
+
       case CommandVerbose: // display lots of data during run
          state->verbose = 1;
          break;
@@ -637,6 +641,12 @@ static int parse_cmdline(int argc, const char **argv, RASPISTILL_STATE *state)
          break;
       }
 
+      case CommandNotifyPID:
+         if (sscanf(argv[i + 1], "%u", &state->notifyPID) != 1)
+            valid = 0;
+         else
+            i++;
+         break;
 
       default:
       {
@@ -1889,6 +1899,7 @@ int main(int argc, const char **argv)
                      // For some reason using vcos_semaphore_wait_timeout sometimes returns immediately with bad parameter error
                      // even though it appears to be all correct, so reverting to untimed one until figure out why its erratic
                      vcos_semaphore_wait(&callback_data.complete_semaphore);
+
                      if (state.verbose)
                         fprintf(stderr, "Finished capture %d\n", frame);
                   }
@@ -1906,6 +1917,14 @@ int main(int argc, const char **argv)
                   }
                   // Disable encoder output port
                   status = mmal_port_disable(encoder_output_port);
+
+                  if (state.notifyPID)
+                  {
+                     int res;
+                     res = kill(state.notifyPID, SIGUSR1);
+                     if (res)
+                        fprintf(stderr, "Problem with sending SIGUSR1 to process PID %u (kill returned %d)\n", state.notifyPID, res);
+                  }
                }
 
                if (use_filename)
